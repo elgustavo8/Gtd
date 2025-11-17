@@ -3,38 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mi GTD Móvil (Self-Contained)</title>
+    <title>Mi GTD Móvil (Almacenamiento Local)</title>
     <!-- Tailwind CSS CDN para el estilo -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Configuración de la fuente Inter -->
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
-        /* Estilo para simular la interfaz de una aplicación móvil en pantallas grandes */
+        /* Contenedor principal para simular la app Android */
         #root {
             max-width: 500px;
             margin: 0 auto;
             min-height: 100vh;
             background-color: white;
             box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
-            position: relative; /* Necesario para la barra de navegación inferior */
+            position: relative; 
         }
     </style>
     <!-- React y Babel CDNs -->
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Firebase SDK (Versión modular) -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, onSnapshot, doc, setDoc, addDoc, updateDoc, deleteDoc, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Exponer módulos de Firebase al ámbito global para el script de Babel
-        window.firebase = {
-            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
-            getFirestore, collection, onSnapshot, doc, setDoc, addDoc, updateDoc, deleteDoc, query
-        };
-    </script>
 </head>
 <body>
     <div id="root">
@@ -43,28 +31,31 @@
 
     <!-- Script de la Aplicación GTD (JSX) -->
     <script type="text/babel">
-        // --- VARIABLES GLOBALES DEL ENTORNO DE CANVAS ---
-        // Estas variables DEBEN ser definidas en el ámbito global para que Babel las vea
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'gtd-app-movil-default';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const { useState, useEffect, useCallback, useMemo } = React;
 
-        let appInstance = null;
-        let dbInstance = null;
-        let authInstance = null;
+        // CLAVE DE ALMACENAMIENTO LOCAL
+        const LOCAL_STORAGE_KEY = 'gtd_tasks_data';
 
-        // Esperar a que los módulos de Firebase carguen antes de ejecutar el componente
-        const waitForFirebase = () => {
-            return new Promise(resolve => {
-                const check = () => {
-                    if (window.firebase && window.firebase.getAuth) {
-                        resolve();
-                    } else {
-                        setTimeout(check, 100);
-                    }
-                };
-                check();
-            });
+        // --- FUNCIONES DE ALMACENAMIENTO LOCAL ---
+
+        // Función para cargar tareas de localStorage
+        const loadTasks = () => {
+            const data = localStorage.getItem(LOCAL_STORAGE_KEY);
+            try {
+                return data ? JSON.parse(data) : [];
+            } catch (e) {
+                console.error("Error al parsear tareas de localStorage:", e);
+                return [];
+            }
+        };
+
+        // Función para guardar tareas en localStorage
+        const saveTasks = (tasks) => {
+            try {
+                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(tasks));
+            } catch (e) {
+                console.error("Error al guardar tareas en localStorage:", e);
+            }
         };
 
         // --- ICONOS SIMPLIFICADOS (SVG INLINE) ---
@@ -103,36 +94,31 @@
             [VIEWS.SOMEDAY_MAYBE]: { icon: Calendar, title: 'Algún Día/Quizás', color: 'text-gray-600' },
         };
 
-        const getCollectionPath = (userId) => {
-            return `/artifacts/${appId}/users/${userId}/gtd_tasks`;
-        };
-
         // --- COMPONENTE TaskItem ---
-        const TaskItem = React.memo(({ task, userId, onEdit }) => {
+        const TaskItem = React.memo(({ task, onEdit, onUpdateTasks }) => {
             const isCompleted = task.status === 'completed';
 
-            const handleToggle = React.useCallback(async () => {
-                if (!dbInstance || !userId) return console.error("Database not ready.");
-                try {
-                    await dbInstance.updateDoc(dbInstance.doc(dbInstance.getFirestore(appInstance), getCollectionPath(userId), task.id), {
+            const handleToggle = useCallback(() => {
+                const tasks = loadTasks();
+                const taskIndex = tasks.findIndex(t => t.id === task.id);
+                if (taskIndex !== -1) {
+                    tasks[taskIndex] = {
+                        ...tasks[taskIndex],
                         status: isCompleted ? 'open' : 'completed',
-                        completedAt: isCompleted ? new Date() : null,
-                    });
-                } catch (e) {
-                    console.error("Error toggling completion: ", e);
+                        completedAt: isCompleted ? null : new Date().toISOString(),
+                    };
+                    saveTasks(tasks);
+                    onUpdateTasks(); 
                 }
-            }, [userId, task.id, isCompleted]);
+            }, [task, isCompleted, onUpdateTasks]);
 
-            const handleDelete = React.useCallback(async () => {
-                if (!dbInstance || !userId) return console.error("Database not ready.");
-                // Usar un modal custom en producción, window.confirm para este entorno
-                if (!window.confirm(`¿Seguro que quieres eliminar: "${task.text}"?`)) return;
-                try {
-                    await dbInstance.deleteDoc(dbInstance.doc(dbInstance.getFirestore(appInstance), getCollectionPath(userId), task.id));
-                } catch (e) {
-                    console.error("Error deleting task: ", e);
-                }
-            }, [userId, task.id, task.text]);
+            const handleDelete = useCallback(() => {
+                if (!window.confirm(`¿Seguro que quieres eliminar la tarea: "${task.text}"?`)) return;
+                const tasks = loadTasks();
+                const newTasks = tasks.filter(t => t.id !== task.id);
+                saveTasks(newTasks);
+                onUpdateTasks(); 
+            }, [task.id, task.text, onUpdateTasks]);
 
             const ViewIcon = VIEW_MAP[task.type]?.icon || Inbox;
             const typeTitle = VIEW_MAP[task.type]?.title || 'Sin Categoría';
@@ -182,13 +168,13 @@
 
 
         // --- COMPONENTE TaskModal ---
-        const TaskModal = ({ isOpen, onClose, userId, currentView, taskToEdit }) => {
-            const [text, setText] = React.useState(taskToEdit?.text || '');
-            const [type, setType] = React.useState(taskToEdit?.type || currentView);
-            const [project, setProject] = React.useState(taskToEdit?.project || '');
-            const [isSaving, setIsSaving] = React.useState(false);
+        const TaskModal = ({ isOpen, onClose, currentView, taskToEdit, onUpdateTasks }) => {
+            const [text, setText] = useState(taskToEdit?.text || '');
+            const [type, setType] = useState(taskToEdit?.type || currentView);
+            const [project, setProject] = useState(taskToEdit?.project || '');
+            const [isSaving, setIsSaving] = useState(false);
 
-            React.useEffect(() => {
+            useEffect(() => {
                 if (taskToEdit) {
                     setText(taskToEdit.text);
                     setType(taskToEdit.type);
@@ -201,38 +187,40 @@
             }, [taskToEdit, currentView]);
 
 
-            const handleSubmit = async (e) => {
+            const handleSubmit = (e) => {
                 e.preventDefault();
-                if (!text.trim() || !dbInstance || !userId) return;
+                if (!text.trim()) return;
 
                 setIsSaving(true);
+                const tasks = loadTasks();
                 const taskData = {
                     text: text.trim(),
                     type: type,
                     project: project.trim() || null,
-                    userId: userId,
-                    updatedAt: new Date(),
+                    updatedAt: new Date().toISOString(),
                 };
 
-                try {
-                    const firestore = dbInstance.getFirestore(appInstance);
-                    if (taskToEdit) {
-                        // Editar tarea existente
-                        await dbInstance.updateDoc(dbInstance.doc(firestore, getCollectionPath(userId), taskToEdit.id), taskData);
-                    } else {
-                        // Nueva tarea
-                        await dbInstance.addDoc(dbInstance.collection(firestore, getCollectionPath(userId)), {
-                            ...taskData,
-                            status: 'open',
-                            createdAt: new Date(),
-                        });
+                if (taskToEdit) {
+                    // Editar tarea existente
+                    const taskIndex = tasks.findIndex(t => t.id === taskToEdit.id);
+                    if (taskIndex !== -1) {
+                        tasks[taskIndex] = { ...tasks[taskIndex], ...taskData };
                     }
-                    onClose();
-                } catch (e) {
-                    console.error("Error al guardar la tarea: ", e);
-                } finally {
-                    setIsSaving(false);
+                } else {
+                    // Nueva tarea
+                    const newTask = {
+                        ...taskData,
+                        id: Date.now().toString(), // ID simple basado en timestamp
+                        status: 'open',
+                        createdAt: new Date().toISOString(),
+                    };
+                    tasks.unshift(newTask); // Añadir al principio
                 }
+                
+                saveTasks(tasks);
+                onUpdateTasks(); 
+                onClose();
+                setIsSaving(false);
             };
 
             if (!isOpen) return null;
@@ -305,87 +293,33 @@
 
         // --- COMPONENTE PRINCIPAL App ---
         function App() {
-            const [userId, setUserId] = React.useState(null);
-            const [isAuthReady, setIsAuthReady] = React.useState(false);
-            const [tasks, setTasks] = React.useState([]);
-            const [currentView, setCurrentView] = React.useState(VIEWS.INBOX);
-            const [isModalOpen, setIsModalOpen] = React.useState(false);
-            const [taskToEdit, setTaskToEdit] = React.useState(null);
-            const [isLoadingTasks, setIsLoadingTasks] = React.useState(true);
+            const [tasks, setTasks] = useState([]);
+            const [currentView, setCurrentView] = useState(VIEWS.INBOX);
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [taskToEdit, setTaskToEdit] = useState(null);
+            const [isLoaded, setIsLoaded] = useState(false);
 
-            // 1. Inicialización de Firebase y Autenticación
-            React.useEffect(() => {
-                waitForFirebase().then(async () => {
-                    try {
-                        appInstance = window.firebase.initializeApp(firebaseConfig);
-                        dbInstance = window.firebase; // Usamos el objeto global para acceder a los módulos de firestore
-                        authInstance = dbInstance.getAuth(appInstance);
-                    } catch (e) {
-                        console.error("Error al inicializar Firebase:", e);
-                    }
-
-                    const handleAuth = async (user) => {
-                        if (user) {
-                            setUserId(user.uid);
-                            setIsAuthReady(true);
-                        } else {
-                            try {
-                                if (initialAuthToken) {
-                                    await dbInstance.signInWithCustomToken(authInstance, initialAuthToken);
-                                } else {
-                                    await dbInstance.signInAnonymously(authInstance);
-                                }
-                            } catch (e) {
-                                console.error("Error de autenticación inicial:", e);
-                                setIsAuthReady(true);
-                            }
-                        }
-                    };
-
-                    const unsubscribeAuth = dbInstance.onAuthStateChanged(authInstance, handleAuth);
-                    return () => unsubscribeAuth();
+            // Cargar tareas al inicio
+            const refreshTasks = useCallback(() => {
+                const fetchedTasks = loadTasks();
+                // Ordenar: Pendientes primero, luego por fecha de creación (createdAt) descendente
+                const sortedTasks = fetchedTasks.sort((a, b) => {
+                    if (a.status === 'completed' && b.status !== 'completed') return 1;
+                    if (a.status !== 'completed' && b.status === 'completed') return -1;
+                    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
                 });
+                setTasks(sortedTasks);
+                setIsLoaded(true);
             }, []);
 
-            // 2. Suscripción a Tareas (Firestore)
-            React.useEffect(() => {
-                if (!isAuthReady || !userId) {
-                    if (!userId) {
-                        setIsLoadingTasks(false);
-                    }
-                    return;
-                }
+            useEffect(() => {
+                refreshTasks();
+            }, [refreshTasks]);
 
-                const firestore = dbInstance.getFirestore(appInstance);
-                const tasksCollectionRef = dbInstance.collection(firestore, getCollectionPath(userId));
-                const tasksQuery = dbInstance.query(tasksCollectionRef);
 
-                const unsubscribe = dbInstance.onSnapshot(tasksQuery, (snapshot) => {
-                    const fetchedTasks = snapshot.docs.map(doc => ({
-                        id: doc.id,
-                        ...doc.data(),
-                        // Convertir Timestamps a objetos Date si existen
-                        createdAt: doc.data().createdAt?.toDate ? doc.data().createdAt.toDate() : new Date(),
-                    }));
-
-                    const sortedTasks = fetchedTasks.sort((a, b) => {
-                        if (a.status === 'completed' && b.status !== 'completed') return 1;
-                        if (a.status !== 'completed' && b.status === 'completed') return -1;
-                        return b.createdAt.getTime() - a.createdAt.getTime();
-                    });
-
-                    setTasks(sortedTasks);
-                    setIsLoadingTasks(false);
-                }, (error) => {
-                    console.error("Error al escuchar las tareas:", error);
-                    setIsLoadingTasks(false);
-                });
-
-                return () => unsubscribe();
-            }, [isAuthReady, userId]);
-
-            const filteredTasks = React.useMemo(() => {
+            const filteredTasks = useMemo(() => {
                 return tasks.filter(task => {
+                    // Mostrar solo tareas abiertas para las vistas principales
                     if (task.status === 'completed') return false;
                     return task.type === currentView;
                 });
@@ -406,12 +340,11 @@
             // Contenido condicional
             let content;
 
-            if (!isAuthReady || isLoadingTasks) {
+            if (!isLoaded) {
                 content = (
                     <div className="flex flex-col items-center justify-center p-8 text-indigo-600">
                         <Loader className="w-8 h-8 animate-spin" />
-                        <p className="mt-4 text-gray-600 font-medium">Cargando la base de datos GTD...</p>
-                        {userId && <p className="text-xs text-gray-400 mt-2 break-words">ID de Usuario: {userId}</p>}
+                        <p className="mt-4 text-gray-600 font-medium">Cargando tareas...</p>
                     </div>
                 );
             } else if (filteredTasks.length === 0) {
@@ -430,8 +363,8 @@
                             <TaskItem
                                 key={task.id}
                                 task={task}
-                                userId={userId}
                                 onEdit={handleOpenModal}
+                                onUpdateTasks={refreshTasks}
                             />
                         ))}
                     </div>
@@ -446,7 +379,7 @@
                         <div className="flex items-center justify-between">
                             <h1 className="text-2xl font-extrabold text-indigo-700 flex items-center">
                                 <Inbox className="w-6 h-6 mr-2" />
-                                <span className="hidden sm:inline">Mi GTD Móvil</span>
+                                <span>Mi GTD Móvil</span>
                             </h1>
                             <h2 className={`text-xl font-bold ${currentViewConfig.color} flex items-center`}>
                                 <currentViewConfig.icon className="w-5 h-5 mr-2" color={currentViewConfig.color.replace('text-', '')} />
@@ -460,48 +393,4 @@
                         {content}
                     </main>
 
-                    {/* Botón Flotante (FAB) para Añadir Tarea */}
-                    <button
-                        onClick={() => handleOpenModal()}
-                        className="fixed bottom-20 right-4 sm:bottom-4 sm:right-4 p-4 rounded-full bg-indigo-600 text-white shadow-xl hover:bg-indigo-700 transition duration-300 transform hover:scale-105 z-40"
-                        aria-label="Añadir nueva tarea"
-                    >
-                        <PlusCircle className="w-6 h-6" color="white" />
-                    </button>
-
-                    {/* Navegación (Bottom Bar) */}
-                    <nav className="fixed bottom-0 w-full max-w-xl bg-white border-t border-gray-200 shadow-2xl z-30 flex justify-around p-2">
-                        {Object.entries(VIEW_MAP).map(([viewKey, { icon: Icon, title, color }]) => (
-                            <button
-                                key={viewKey}
-                                onClick={() => setCurrentView(viewKey)}
-                                className={`flex flex-col items-center p-2 rounded-xl transition duration-200 ${
-                                    currentView === viewKey
-                                        ? `${color} bg-indigo-50/70`
-                                        : 'text-gray-500 hover:text-indigo-600 hover:bg-gray-50'
-                                }`}
-                                aria-current={currentView === viewKey ? 'page' : undefined}
-                            >
-                                <Icon className="w-6 h-6" color={currentView === viewKey ? color.replace('text-', '') : 'gray'}/>
-                                <span className="text-xs mt-1 font-medium hidden sm:block">{title}</span>
-                            </button>
-                        ))}
-                    </nav>
-
-                    {/* Modal de Tarea */}
-                    <TaskModal
-                        isOpen={isModalOpen}
-                        onClose={handleCloseModal}
-                        userId={userId}
-                        currentView={currentView}
-                        taskToEdit={taskToEdit}
-                    />
-                </div>
-            );
-        }
-
-        ReactDOM.render(<App />, document.getElementById('root'));
-    </script>
-</body>
-</html>
-
+                    {/
